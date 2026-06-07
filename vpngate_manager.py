@@ -2312,6 +2312,7 @@ Telegram 群组
 <main>
 <div class="toolbar">
 <select id="countryFilter"><option value="">节点池</option></select>
+<input type="text" id="excludeFilter" placeholder="排除IP前缀, 如 203.104" oninput="renderTable()" />
 <input type="text" id="searchInput" placeholder="搜索节点名称、IP 或标签..." oninput="renderTable()" />
 <div class="toolbar-actions">
 <button class="btn-primary" onclick="testAllNodes()">全部测试</button>
@@ -2522,12 +2523,24 @@ function buildCountrySelect(selected) {
   }
   return h;
 }
-function buildAsnSelect(selected) {
-  var h = '';
-  for (var i=0;i<asnOptions.length;i++) {
-    var v=asnOptions[i], label=v||'自动', sel=(v===selected)?' selected':'';
-    h += '<option value="'+v+'"'+sel+'>'+label+'</option>';
-  }
+function buildAsnSelectForChannel(selected, countryFilter) {
+  var list = (nodes.length ? nodes : sampleNodes);
+  if (countryFilter) list = list.filter(function(n){ return (n.country||"")===countryFilter; });
+  var asnMap = {};
+  list.forEach(function(n){ var a = n.asn||""; if(a) asnMap[a]=(asnMap[a]||0)+1; });
+  var asns = Object.keys(asnMap).sort();
+  var h = "<option value=\"\">自动</option>";
+  asns.forEach(function(a){ var cnt=asnMap[a]>1?"("+asnMap[a]+"个)":""; var s=(a===selected)?" selected":""; h+="<option value=\""+a+"\""+s+">"+a+cnt+"</option>"; });
+  if(!asns.length) h += "<option value=\"\" disabled>无可用ASN</option>";
+  return h;
+}
+function buildNodeSelectForChannel(countryFilter, asnFilter, selected) {
+  var list = (nodes.length ? nodes : sampleNodes);
+  if (countryFilter) list = list.filter(function(n){ return (n.country||"")===countryFilter; });
+  if (asnFilter) list = list.filter(function(n){ return (n.asn||"")===asnFilter; });
+  var h = "<option value=\"\">自动选择</option>";
+  list.forEach(function(n){ var s=(n.name===selected||n.id===selected)?" selected":""; var label=n.name||n.ip||""; h+="<option value=\""+esc(n.name)+"\""+s+">"+esc(label)+" ("+esc(n.ip||"")+")</option>"; });
+  if(!list.length) h += "<option value=\"\" disabled>无匹配节点</option>";
   return h;
 }
 
@@ -2558,7 +2571,7 @@ function renderChannels() {
       '<div class="channel-card-metrics"><span class="metric-item"><span class="metric-label">时延</span><span class="latency-val '+latencyClass+'">'+latencyDisplay+' ms</span></span>'+
       '<span class="metric-item"><span class="metric-label">速度</span><span class="speed-val">'+speedVal+'</span><span style="font-size:8px;color:var(--text-tertiary)">'+speedUnit+'</span><span class="speed-bar"><span class="speed-bar-fill" style="width:'+barWidth+'%"></span></span></span></div>'+
       '<div class="channel-lock-options"><span class="lock-label lock-select-country">国家</span><select onchange="setChannelCountry('+i+',this.value)">'+buildCountrySelect(ch.lock_country||'')+'</select>'+
-      '<span class="lock-label lock-select-asn">ASN</span><select onchange="setChannelAsn('+i+',this.value)">'+buildAsnSelect(ch.lock_asn||'')+'</select></div>'+
+      '<span class="lock-label lock-select-asn">ASN</span><select onchange="setChannelAsn('+i+',this.value)">'+buildAsnSelectForChannel(ch.lock_asn||'',ch.lock_country||'')+'</select><span class="lock-label" style="font-size:8px;color:var(--text-tertiary)">节点</span><select onchange="setChannelNode('+i+',this.value)">'+buildNodeSelectForChannel(ch.lock_country||'',ch.lock_asn||'',ch.lock_node||'')+'</select></div>'+
       '<div class="channel-card-footer"><div class="channel-conn-status"><span class="dot-sm '+(ch.online?'connected':'disconnected')+'"></span><span class="'+(ch.online?'text-connected':'text-disconnected')+'">'+(ch.online?'已连接':'未连接')+'</span></div>'+
       (ch.online?'<button class="channel-disconnect-btn" onclick="disconnectChannel('+i+')">断开</button>':'<button class="channel-connect-btn" onclick="connectChannel('+i+')">连接</button>')+
       '</div></div>';
@@ -2573,6 +2586,15 @@ function renderTable() {
   var filterVal = $('countryFilter') ? $('countryFilter').value : '';
   var searchVal = $('searchInput') ? $('searchInput').value.toLowerCase().trim() : '';
   if (filterVal) list = list.filter(function(n){ return (n.country||'')===filterVal; });
+  var excludeVal = $('excludeFilter') ? $('excludeFilter').value.trim() : '';
+  if (excludeVal) {
+    var prefixes = excludeVal.split(',').map(function(s){ return s.trim(); }).filter(function(s){ return s; });
+    if (prefixes.length) list = list.filter(function(n){
+      var ip = n.ip||'';
+      for (var j=0;j<prefixes.length;j++) { if (ip.indexOf(prefixes[j])===0) return false; }
+      return true;
+    });
+  }
   if (searchVal) list = list.filter(function(n){ return (n.name||'').toLowerCase().indexOf(searchVal)>=0||(n.ip||'').indexOf(searchVal)>=0; });
   var tbody = $('tableBody');
   if (!tbody) return;
@@ -2609,7 +2631,7 @@ async function selectNode(name) {
   try {
     var r = await fetch('./api/select_node',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:name})
+      body:JSON.stringify({id:name})
     });
     var d = await r.json();
     if (d.error) { alert('连接失败: '+d.error); return; }
@@ -2624,7 +2646,7 @@ async function testNode(name) {
   try {
     var r = await fetch('./api/test_node',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:name})
+      body:JSON.stringify({id:name})
     });
     var d = await r.json();
     if (d.ok) { await load(); }
@@ -2641,18 +2663,48 @@ async function testAllNodes() {
   }
 }
 
-// ===== Channel Actions =====
-function connectChannel(idx) {
+function setChannelNode(idx, val) {
   var chList = channels.length ? channels : sampleChannels;
-  if (chList[idx]) {
-    chList[idx].online = true;
-    chList[idx].connecting = false;
-    chList[idx].speed = (Math.random()*40+5).toFixed(1);
-    chList[idx].latency = Math.floor(Math.random()*180+25);
-    chList[idx].exit_ip = '203.104.'+(209+Math.floor(idx/3))+'.'+(15+idx*7);
-    renderChannels();
+  if (chList[idx]) chList[idx].lock_node = val;
+}
+// ===== Channel Actions =====
+async function connectChannel(idx) {
+  var chList = channels.length ? channels : sampleChannels;
+  if (!chList[idx]) return;
+  var ch = chList[idx];
+  var list = nodes.length ? nodes : sampleNodes;
+  // Filter nodes by channel's country/ASN/node settings
+  if (ch.lock_country) list = list.filter(function(n){ return (n.country||'')===ch.lock_country; });
+  if (ch.lock_asn) list = list.filter(function(n){ return (n.asn||'')===ch.lock_asn; });
+  if (ch.lock_node) list = list.filter(function(n){ return (n.name===ch.lock_node||n.id===ch.lock_node); });
+  if (!list.length) { alert('没有匹配的节点，请检查国家/ASN/节点选择'); return; }
+  var target = list[0];
+  ch.connecting = true;
+  ch.online = false;
+  renderChannels();
+  try {
+    var r = await fetch('./api/connect', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: target.name})
+    });
+    var d = await r.json();
+    if (d.ok) {
+      ch.online = true;
+      ch.connecting = false;
+      ch.speed = target.speed || '-';
+      ch.latency = target.latency || 0;
+      ch.exit_ip = target.ip || '';
+      ch.asn = target.asn || '';
+      ch.asn_org = target.asn_org || '';
+    } else {
+      alert('连接失败: '+(d.error||'未知错误'));
+      ch.connecting = false;
+    }
+  } catch(e) {
+    alert('连接请求失败');
+    ch.connecting = false;
   }
-  // Real API: fetch('./api/connect_channel', {method:'POST', body: JSON.stringify({channel:idx})});
+  renderChannels();
 }
 
 function disconnectChannel(idx) {
