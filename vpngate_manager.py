@@ -2454,12 +2454,12 @@ var channelPollInterval = null;
 
 // ===== Sample / Fallback data =====
 var sampleChannels = [];
-for (var si = 0; si < 10; si++) {
+for (var si = 0; si < 6; si++) {
   sampleChannels.push({
     index: si, exit_ip: '203.104.'+(209+Math.floor(si/3))+'.'+(15+si*7),
-    asn: 'AS'+(4000+si*113), asn_org: ['NTT Communications','Amazon AWS','Google Cloud','Microsoft Azure','SoftBank','KDDI','Tencent Cloud','Alibaba Cloud','Akamai','Fastly'][si],
+    asn: 'AS'+(4000+si*113), asn_org: ['NTT Communications','Amazon AWS','Google Cloud','Microsoft Azure','SoftBank','KDDI'][si],
     speed: (Math.random()*45+5).toFixed(1), speed_unit:'MB/s', latency: Math.floor(Math.random()*180+25),
-    online: si<7, connecting:false, country:['日本','美国','新加坡','韩国','英国','德国','日本','美国','加拿大','澳大利亚'][si],
+    online: si<6, connecting:false, country:['日本','美国','新加坡','韩国','英国','德国'][si],
     lock_country:'', lock_asn:''
   });
 }
@@ -2549,7 +2549,7 @@ function renderChannels() {
   if (!grid) return;
   var chList = (channels.length ? channels : sampleChannels);
   var html = '';
-  for (var i=0;i<Math.min(chList.length,10);i++) {
+  for (var i=0;i<Math.min(chList.length,6);i++) {
     var ch = chList[i] || {index:i,online:false};
     var statusClass = ch.online ? 'online' : (ch.connecting ? 'connecting' : 'offline');
     var activeClass = (i===0&&ch.online) ? 'active' : '';
