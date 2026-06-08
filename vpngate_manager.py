@@ -2785,6 +2785,7 @@ async function connectChannel(idx) {
       ch.exit_ip = target.ip || '';
       ch.asn = target.asn || '';
       ch.asn_org = target.asn_org || '';
+      ch.country = target.country || '';
     } else {
       alert('连接失败: '+(d.error||'未知错误'));
       ch.connecting = false;
