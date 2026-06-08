@@ -369,6 +369,10 @@ def get_state() -> dict[str, Any]:
     state["port"] = ui_cfg.get("port", 8787)
     state["secret_path"] = ui_cfg.get("secret_path", "EJsW2EeBo9lY")
     state["password_set"] = bool(ui_cfg.get("password"))
+    state["domain"] = ui_cfg.get("domain", "")
+    state["https"] = ui_cfg.get("https", False)
+    state["cert_path"] = ui_cfg.get("cert_path", "")
+    state["key_path"] = ui_cfg.get("key_path", "")
     state["proxy_port"] = ui_cfg.get("proxy_port", 7928)
     state["routing_mode"] = ui_cfg.get("routing_mode", "auto")
     state["force_country"] = ui_cfg.get("force_country", "")
@@ -2296,6 +2300,11 @@ Telegram 群组
 </div>
 </div>
 </header>
+<!-- ===== Domain URL Bar ===== -->
+<div id="domainBar" style="display:none;padding:6px 16px;background:rgba(99,102,241,0.06);border-bottom:1px solid var(--border-default);font-size:12px;color:var(--text-tertiary)">
+  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+  <span id="domainUrl"></span>
+</div>
 
 <!-- ===== Channel Section ===== -->
 <section class="channel-section">
@@ -2340,6 +2349,10 @@ Telegram 群组
 <div class="form-group"><label class="form-label">密码</label><input class="input-field" id="credPassword" type="password" /></div>
 <div class="form-group"><label class="form-label">网页管理端口</label><input class="input-field" id="credPort" type="number" value="8787" /></div>
 <div class="form-group"><label class="form-label">登录安全后缀</label><input class="input-field" id="credSuffix" placeholder="仅英文和数字" /></div>
+<div class="form-group"><label class="form-label">绑定域名（可选）</label><input class="input-field" id="credDomain" placeholder="例: admin.example.com" /></div>
+<div class="form-group" style="display:flex;align-items:center;gap:8px"><label class="form-label" style="white-space:nowrap">启用 HTTPS</label><input type="checkbox" id="credHttps" style="width:18px;height:18px;accent-color:var(--accent)" /> <span style="font-size:11px;color:var(--text-tertiary)">需要 SSL 证书文件</span></div>
+<div class="form-group"><label class="form-label">证书文件路径</label><input class="input-field" id="credCertPath" placeholder="/etc/ssl/certs/cert.pem" /></div>
+<div class="form-group"><label class="form-label">密钥文件路径</label><input class="input-field" id="credKeyPath" placeholder="/etc/ssl/certs/key.pem" /></div>
 <div class="modal-actions">
 <button type="button" class="btn-secondary" onclick="closeCredentialsModal()">取消</button>
 <button type="submit" class="btn-primary" id="credentialsSubmitBtn">保存修改</button>
@@ -2484,6 +2497,7 @@ async function load() {
     nodes = d.nodes || [];
     nodes = nodes.map(function(n){ if(n.latency==null&&n.latency_ms!=null)n.latency=n.latency_ms; if(n.latency==null&&n.ping!=null)n.latency=n.ping; if(!n.name)n.name=n.host_name||n.id||''; if(!n.status)n.status=n.probe_status||(n.active?'available':'pending'); return n; });
     state = d.state || {};
+    updateDomainBar(state);
     $('systemStatus').innerHTML = '<span class=\"dot\"></span>系统运行中';
     updateCountryFilter();
     renderChannels();
@@ -2498,7 +2512,26 @@ async function load() {
   }
 }
 
+
+function updateDomainBar(s) {
+  var bar = $('domainBar');
+  var urlEl = $('domainUrl');
+  if (!bar || !urlEl) return;
+  var domain = s && s.domain || '';
+  var https = s && s.https || false;
+  var port = s && s.port || 8787;
+  var suffix = s && s.secret_path || '';
+  if (domain) {
+    var proto = https ? 'https' : 'http';
+    var portStr = (proto==='https'&&port===443)||(proto==='http'&&port===80) ? '' : ':'+port;
+    urlEl.innerHTML = '<span style="color:var(--text-secondary)">访问地址: </span><a href="'+proto+'://'+domain+portStr+'/'+suffix+'/" target="_blank" style="color:var(--accent);text-decoration:none">'+proto+'://'+domain+portStr+'/'+suffix+'/</a>';
+    bar.style.display = 'block';
+  } else {
+    bar.style.display = 'none';
+  }
+}
 function updateCountryFilter() {
+
   var sel = $('countryFilter');
   if (!sel) return;
   var countMap = {};
@@ -2778,6 +2811,10 @@ function openCredentialsModal() {
     $('credPassword').value = '';
     $('credPort').value = state.port||8787;
     $('credSuffix').value = state.secret_path||'';
+    $('credDomain').value = state.domain||'';
+    $('credHttps').checked = state.https||false;
+    $('credCertPath').value = state.cert_path||'';
+    $('credKeyPath').value = state.key_path||'';
   }
   $('credentialsModal').style.display='flex';
   $('adminDropdown').style.display='none';
@@ -2790,6 +2827,10 @@ async function saveCredentials(e) {
   errorEl.style.display='none'; successEl.style.display='none';
   var username=$('credUsername').value.trim(), password=$('credPassword').value.trim();
   var port=parseInt($('credPort').value), suffix=$('credSuffix').value.trim();
+  var domain=$('credDomain').value.trim();
+  var https=$('credHttps').checked;
+  var certPath=$('credCertPath').value.trim();
+  var keyPath=$('credKeyPath').value.trim();
   if (!username||(!password&&!(state&&state.password_set))) {
     errorEl.textContent='用户名不能为空；首次设置时密码不能为空';
     errorEl.style.display='block'; return;
@@ -2806,7 +2847,7 @@ async function saveCredentials(e) {
   try {
     var r = await fetch('./api/update_credentials', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({username:username,password:password,port:port,secret_path:suffix})
+      body:JSON.stringify({username:username,password:password,port:port,secret_path:suffix,domain:domain,https:https,cert_path:certPath,key_path:keyPath})
     });
     var d = await r.json();
     if (r.ok&&d.ok) {
@@ -3011,7 +3052,7 @@ setInterval(async function() {
     try {
       var r=await fetch('./api/nodes');
       var d=await r.json();
-      if (d.nodes) { nodes=(d.nodes||[]).map(function(n){ var nn=Object.assign({},n); if(nn.latency==null&&nn.latency_ms!=null)nn.latency=nn.latency_ms; if(nn.latency==null&&nn.ping!=null)nn.latency=nn.ping; if(!nn.name)nn.name=nn.host_name||nn.id||''; if(!nn.status)nn.status=nn.probe_status||(nn.active?'available':'pending'); return nn; }); state=d.state||{}; updateCountryFilter(); renderTable(); }
+      if (d.nodes) { nodes=(d.nodes||[]).map(function(n){ var nn=Object.assign({},n); if(nn.latency==null&&nn.latency_ms!=null)nn.latency=nn.latency_ms; if(nn.latency==null&&nn.ping!=null)nn.latency=nn.ping; if(!nn.name)nn.name=nn.host_name||nn.id||''; if(!nn.status)nn.status=nn.probe_status||(nn.active?'available':'pending'); return nn; }); state=d.state||{}; updateDomainBar(state); updateCountryFilter(); renderTable(); }
     } catch(e) {}
   }
 }, 10000);
@@ -3580,6 +3621,10 @@ class Handler(BaseHTTPRequestHandler):
                 new_password = str(payload.get("password") or "").strip()
                 new_port = payload.get("port")
                 new_suffix = str(payload.get("secret_path") or "").strip()
+                new_domain = str(payload.get("domain") or "").strip()
+                new_https = bool(payload.get("https", False))
+                new_cert_path = str(payload.get("cert_path") or "").strip()
+                new_key_path = str(payload.get("key_path") or "").strip()
                 
                 ui_cfg = load_ui_config()
                 if not new_username or (not new_password and not ui_cfg.get("password")):
@@ -3602,12 +3647,20 @@ class Handler(BaseHTTPRequestHandler):
                 expected_password = ui_cfg.get("password", "")
                 expected_port = ui_cfg.get("port", 8787)
                 expected_suffix = ui_cfg.get("secret_path", "EJsW2EeBo9lY")
+                expected_domain = ui_cfg.get("domain", "")
+                expected_https = ui_cfg.get("https", False)
+                expected_cert_path = ui_cfg.get("cert_path", "")
+                expected_key_path = ui_cfg.get("key_path", "")
 
                 ui_cfg["username"] = new_username
                 if new_password:
                     ui_cfg["password"] = new_password
                 ui_cfg["port"] = new_port_int
                 ui_cfg["secret_path"] = new_suffix
+                ui_cfg["domain"] = new_domain
+                ui_cfg["https"] = new_https
+                ui_cfg["cert_path"] = new_cert_path
+                ui_cfg["key_path"] = new_key_path
                 
                 auth_file = DATA_DIR / "ui_auth.json"
                 reauth_required = new_username != expected_username or (new_password and new_password != expected_password)
@@ -3617,7 +3670,7 @@ class Handler(BaseHTTPRequestHandler):
                     if reauth_required:
                         active_sessions.clear()
                 
-                restart_needed = (new_port_int != expected_port or new_suffix != expected_suffix)
+                restart_needed = (new_port_int != expected_port or new_suffix != expected_suffix or new_domain != expected_domain or new_https != expected_https or new_cert_path != expected_cert_path or new_key_path != expected_key_path)
                 if restart_needed:
                     self.send_json({"ok": True, "restart_needed": True, "reauth_required": reauth_required, "message": "配置更新成功，网页管理端口或路径已变更，将在 2 秒内重启..."})
                     
