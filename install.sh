@@ -47,7 +47,7 @@ echo -e "${BLUE}        欢迎使用 AimiliVPN 一键源码部署与管理脚本
 echo -e "${BLUE}==========================================================${PLAIN}"
 
 # 3. Configure GitHub Repository URL
-# Default to the official repository (baoweise-bot/aimili-vpngate)
+# Default to the official repository (sakuyawzbb099/vpgate)
 DEFAULT_USER="sakuyawzbb099"
 DEFAULT_REPO="vpgate"
 
