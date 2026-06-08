@@ -136,6 +136,11 @@ active_openvpn_node_id = ""
 is_connecting = True
 last_active_ping_time = 0.0
 last_active_latency = 0
+MAX_CHANNELS = 6
+CHANNEL_BASE_PORT = 7928
+ch_processes = [None] * MAX_CHANNELS
+ch_node_ids = [''] * MAX_CHANNELS
+ch_connecting = [False] * MAX_CHANNELS
 
 last_collector_heartbeat = 0.0
 last_checker_heartbeat = 0.0
@@ -374,6 +379,7 @@ def get_state() -> dict[str, Any]:
     state["cert_path"] = ui_cfg.get("cert_path", "")
     state["key_path"] = ui_cfg.get("key_path", "")
     state["proxy_port"] = ui_cfg.get("proxy_port", 7928)
+    state["channel_ports"] = [CHANNEL_BASE_PORT + i for i in range(MAX_CHANNELS)]
     state["routing_mode"] = ui_cfg.get("routing_mode", "auto")
     state["force_country"] = ui_cfg.get("force_country", "")
     state["routing_ip_type"] = ui_cfg.get("routing_ip_type", "all")
@@ -1451,6 +1457,49 @@ def auto_switch_node(attempt: int = 0) -> None:
         
         threading.Thread(target=bg_fetch_and_switch, daemon=True).start()
 
+def connect_channel(channel_idx: int, node_id: str) -> str:
+    if channel_idx < 0 or channel_idx >= MAX_CHANNELS:
+        raise ValueError(f"Invalid channel: {channel_idx}")
+    node_id = str(node_id or "").strip()
+    if not node_id:
+        raise ValueError("Node id is required")
+    with lock:
+        if ch_connecting[channel_idx]:
+            raise RuntimeError(f"Channel {channel_idx} is already connecting")
+        ch_connecting[channel_idx] = True
+        ch_node_ids[channel_idx] = node_id
+    try:
+        nodes = read_nodes()
+        node = next((item for item in nodes if item.get("id") == node_id), None)
+        if not node:
+            raise ValueError(f"Channel {channel_idx}: Node not found: {node_id}")
+        config_text = node.get("config_text", "") or ""
+        if not config_text:
+            cp = Path(node.get("config_file", "") or "")
+            if cp.exists():
+                config_text = cp.read_text(encoding="utf-8")
+        if not config_text:
+            raise ValueError(f"No config for node {node_id}")
+        ok, msg, proc = run_openvpn_until_ready(config_text, keep_alive=True, route_nopull=False, dev=f"tun{channel_idx}")
+        if ok and proc:
+            ch_processes[channel_idx] = proc
+            setup_policy_routing(f"tun{channel_idx}")
+        return msg
+    finally:
+        ch_connecting[channel_idx] = False
+
+
+def disconnect_channel(channel_idx: int) -> str:
+    if channel_idx < 0 or channel_idx >= MAX_CHANNELS:
+        raise ValueError(f"Invalid channel: {channel_idx}")
+    with lock:
+        if ch_processes[channel_idx]:
+            stop_process(ch_processes[channel_idx])
+            ch_processes[channel_idx] = None
+            ch_node_ids[channel_idx] = ""
+    return "disconnected"
+
+
 def connect_node(node_id: str) -> str:
     global active_openvpn_process, active_openvpn_node_id, is_connecting
     node_id = str(node_id or "").strip()
@@ -2090,7 +2139,7 @@ background:var(--bg-glass);border:1px solid var(--border-default);color:var(--te
 .channel-section-title{font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--accent-gold-light);display:flex;align-items:center;gap:10px}
 .channel-section-title svg{width:18px;height:18px}
 .channel-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px}
-.channel-select-btn{background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;padding:12px 8px;color:var(--text-primary);font-size:13px;font-weight:500;cursor:pointer;transition:all 0.15s ease;text-align:center}
+.channel-port-label{font-size:10px;font-weight:600;color:var(--accent-purple-light);background:rgba(167,139,250,0.1);padding:1px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace}.channel-select-btn{background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;padding:12px 8px;color:var(--text-primary);font-size:13px;font-weight:500;cursor:pointer;transition:all 0.15s ease;text-align:center}
 .channel-select-btn:hover{background:rgba(99,102,241,0.18);border-color:var(--accent);transform:translateY(-1px)}
 .channel-select-btn:active{transform:translateY(0)}
 .channel-select-btn{background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;padding:12px 8px;color:var(--text-primary);font-size:13px;font-weight:500;cursor:pointer;transition:all 0.15s ease;text-align:center}
@@ -2492,7 +2541,7 @@ for (var si = 0; si < 6; si++) {
     asn: 'AS'+(4000+si*113), asn_org: ['NTT Communications','Amazon AWS','Google Cloud','Microsoft Azure','SoftBank','KDDI'][si],
     speed: (Math.random()*45+5).toFixed(1), speed_unit:'MB/s', latency: Math.floor(Math.random()*180+25),
     online: false, connecting:false, country:['日本','美国','新加坡','韩国','英国','德国'][si],
-    lock_country:'', lock_asn:''
+    lock_country:'', lock_asn:'', port:7928+si
   });
 }
 var sampleNodes = [
@@ -2618,7 +2667,7 @@ function renderChannels() {
     }
     var country = ch.country || '';
     html += '<div class="channel-card '+activeClass+'">'+
-      '<div class="channel-card-header"><div style="display:flex;align-items:center;gap:6px"><span class="channel-num">'+i+'</span><span class="channel-card-title">通道'+i+'</span></div><span class="channel-card-status '+statusClass+'"></span></div>'+
+      '<div class="channel-card-header"><div style="display:flex;align-items:center;gap:6px"><span class="channel-num">'+i+'</span><span class="channel-card-title">通道'+i+'</span><span class="channel-port-label">:'+(ch.port||(7928+i))+'</span></div><span class="channel-card-status '+statusClass+'"></span></div>'+
       '<div class="channel-card-ip" title="'+ipDisplay+'"><span style="font-size:9px;color:var(--text-tertiary);font-weight:400;font-family:Inter,sans-serif;margin-right:4px">出口IP </span>'+ipDisplay+'</div>'+
       '<div class="channel-card-details"><span class="channel-card-asn">'+asnDisplay+'</span>'+(ch.online&&country?'<span style="color:var(--text-tertiary)">'+esc(country)+'</span>':'')+'</div>'+
       '<div class="channel-card-metrics"><span class="metric-item"><span class="metric-label">时延</span><span class="latency-val '+latencyClass+'">'+latencyDisplay+' ms</span></span>'+
@@ -2774,7 +2823,7 @@ async function connectChannel(idx) {
   try {
     var r = await fetch('./api/connect', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id: target.id||target.name})
+      body: JSON.stringify({channel: idx, id: target.id||target.name})
     });
     var d = await r.json();
     if (d.ok) {
@@ -2804,7 +2853,7 @@ function disconnectChannel(idx) {
     chList[idx].connecting = false;
     renderChannels();
   }
-  // Real API: fetch('./api/disconnect_channel', {method:'POST', body: JSON.stringify({channel:idx})});
+  fetch('./api/disconnect_channel', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({channel:idx})}).catch(function(){})
 }
 
 function setChannelCountry(idx, val) {
@@ -3108,7 +3157,7 @@ setInterval(async function() {
     try {
       var r=await fetch('./api/nodes');
       var d=await r.json();
-      if (d.nodes) { nodes=(d.nodes||[]).map(function(n){ var nn=Object.assign({},n); if(nn.latency==null&&nn.latency_ms!=null)nn.latency=nn.latency_ms; if(nn.latency==null&&nn.ping!=null)nn.latency=nn.ping; if(!nn.name)nn.name=nn.host_name||nn.id||''; if(!nn.status)nn.status=nn.probe_status||(nn.active?'available':'pending'); return nn; }); state=d.state||{}; updateDomainBar(state); updateCountryFilter(); renderTable(); }
+      if (d.channels) { d.channels.forEach(function(ch,i){ if(sampleChannels[i]){ sampleChannels[i].online=ch.online; sampleChannels[i].connecting=ch.connecting; sampleChannels[i].port=ch.port||(7928+i); } }); } if (d.nodes) { nodes=(d.nodes||[]).map(function(n){ var nn=Object.assign({},n); if(nn.latency==null&&nn.latency_ms!=null)nn.latency=nn.latency_ms; if(nn.latency==null&&nn.ping!=null)nn.latency=nn.ping; if(!nn.name)nn.name=nn.host_name||nn.id||''; if(!nn.status)nn.status=nn.probe_status||(nn.active?'available':'pending'); return nn; }); state=d.state||{}; updateDomainBar(state); updateCountryFilter(); renderTable(); }
     } catch(e) {}
   }
 }, 10000);
@@ -3475,7 +3524,8 @@ class Handler(BaseHTTPRequestHandler):
                 if "config_text" in stripped:
                     del stripped["config_text"]
                 stripped_nodes.append(stripped)
-            self.send_json({"nodes": stripped_nodes, "state": get_state()})
+            ch_status = [{"index":i,"node_id":ch_node_ids[i],"online":ch_processes[i] is not None and ch_processes[i].poll() is None,"connecting":ch_connecting[i],"port":CHANNEL_BASE_PORT+i} for i in range(MAX_CHANNELS)]
+        self.send_json({"nodes": stripped_nodes, "state": get_state(), "channels": ch_status})
         elif effective_path.startswith("/configs/"):
             filename = urllib.parse.unquote(effective_path.removeprefix("/configs/"))
             with lock:
@@ -3879,6 +3929,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "nodes": tested_nodes})
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+        elif effective_path == "/api/disconnect_channel":
+            try:
+                payload = self.read_json_body()
+                channel_idx = int(payload.get("channel", 0))
+                result = disconnect_channel(channel_idx)
+                self.send_json({"ok": True, "message": result})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+        
         elif effective_path == "/api/disconnect":
             try:
                 ui_cfg = load_ui_config()
@@ -3904,7 +3963,13 @@ class Handler(BaseHTTPRequestHandler):
         elif effective_path == "/api/connect":
             try:
                 payload = self.read_json_body()
-                self.send_json({"ok": True, "message": connect_node(str(payload.get("id") or ""))})
+                channel_idx = int(payload.get("channel", 0))
+                node_id = str(payload.get("id") or "")
+                if node_id:
+                    result = connect_channel(channel_idx, node_id)
+                else:
+                    result = connect_node(str(payload.get("id") or ""))
+                self.send_json({"ok": True, "message": result})
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
         elif effective_path == "/api/test_node":
@@ -3985,7 +4050,8 @@ def main() -> None:
             "blacklisted_nodes": 0,
         },
     )
-    threading.Thread(target=proxy_server.start_proxy_server, args=(LOCAL_PROXY_HOST, LOCAL_PROXY_PORT), daemon=True).start()
+    for chi in range(MAX_CHANNELS):
+    threading.Thread(target=proxy_server.start_proxy_server, args=('127.0.0.1', CHANNEL_BASE_PORT + chi), daemon=True).start()
     
     # Wait for the gateway to officially start
     print("[网关] 正在启动代理网关...", flush=True)
