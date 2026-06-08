@@ -2592,10 +2592,10 @@ function renderChannels() {
     var barWidth = ch.online ? Math.min(100,Math.floor(parseFloat(speedVal)*3)) : 0;
     var ipDisplay = ch.online ? (ch.exit_ip||'--.--.--.--') : '--.--.--.--';
     var asnDisplay = ch.online ? ((ch.asn||'')+' · '+(ch.asn_org||'')) : '--';
-    var latencyDisplay = ch.online ? (ch.latency!=null?ch.latency:'-') : '-';
+    var latencyDisplay = ch.online ? (ch.latency>0?ch.latency:'-') : '-';
     var latencyClass = '';
     if (ch.online && ch.latency!=null) {
-      latencyClass = ch.latency<80 ? 'latency-good' : (ch.latency<160 ? 'latency-medium' : 'latency-poor');
+      latencyClass = ch.latency>0 ? (ch.latency<80 ? 'latency-good' : (ch.latency<160 ? 'latency-medium' : 'latency-poor')) : '';
     }
     var country = ch.country || '';
     html += '<div class="channel-card '+activeClass+'">'+
@@ -2641,7 +2641,7 @@ function renderTable() {
     else if (n.status==='unavailable'||n.status==='offline') { statusLabel='不可用'; statusBadgeClass='badge-unavailable'; }
     else if (n.status==='pending') { statusLabel='待测'; statusBadgeClass='badge-pending'; }
     else { statusLabel='可用'; statusBadgeClass='badge-available'; }
-    var latencyClass = n.latency<80 ? 'latency-good' : (n.latency<160 ? 'latency-medium' : 'latency-poor');
+    var latencyClass = n.latency>0 ? (n.latency<80 ? 'latency-good' : (n.latency<160 ? 'latency-medium' : 'latency-poor')) : '';
     var asnDisplay = (n.asn||'')+' · '+(n.asn_org||'');
     var isTesting = testingNodeIds.has(n.name);
     html += '<tr class="'+(isActive?'active-row':'')+'">'+
@@ -2649,7 +2649,7 @@ function renderTable() {
       '<td>'+esc(n.country||'')+'</td>'+
       '<td class="mono">'+esc(n.ip||'')+'</td>'+
       '<td class="mono" style="font-size:11px;color:var(--text-tertiary)">'+esc(asnDisplay)+'</td>'+
-      '<td><span class="latency-val '+latencyClass+'">'+(n.latency!=null?n.latency:'-')+' ms</span></td>'+
+      '<td><span class="latency-val '+latencyClass+'">'+(n.latency>0?n.latency:'-')+' ms</span></td>'+
       '<td style="font-family:\'JetBrains Mono\',monospace;font-weight:500;color:var(--text-primary)">'+(n.speed!=null?n.speed:'-')+' MB/s</td>'+
       '<td><span class="badge '+statusBadgeClass+'">'+(statusLabel==='可用'?'<span class="badge-pulse"></span>':'')+statusLabel+'</span></td>'+
       '<td><div class="table-actions">'+
