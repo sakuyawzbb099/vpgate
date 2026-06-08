@@ -955,6 +955,9 @@ def kill_existing_openvpn_processes() -> None:
             executable = Path(args[0]).name.lower()
             if "openvpn" not in executable and "openvpn" not in cmdline.lower():
                 continue
+            # Skip: don't kill channel OpenVPN processes
+            if any(f"dev tun{chi}" in cmdline for chi in range(MAX_CHANNELS)):
+                continue
             if any(marker and marker in cmdline for marker in own_markers):
                 try:
                     os.kill(pid, signal.SIGTERM)
@@ -1397,6 +1400,14 @@ def auto_switch_node(attempt: int = 0) -> None:
     if attempt >= 3:
         print("[自动切换] 连续切换失败已达 3 次，停止切换以防止主线程死锁，将在后台重新加载节点...", flush=True)
         return
+    
+    # Skip auto-switch if any channel is actively connected (multi-channel mode)
+    with lock:
+        for chi in range(MAX_CHANNELS):
+            if ch_processes[chi] is not None and ch_processes[chi].poll() is None:
+                print(f"[自动切换] 通道 {chi} 正在使用中，跳过旧版单连接自动切换。", flush=True)
+                return
+    
         
     ui_cfg = load_ui_config()
     connection_enabled = ui_cfg.get("connection_enabled", True)
@@ -1680,7 +1691,14 @@ def maintain_valid_nodes(force: bool = False) -> str:
                     with lock:
                         if active_openvpn_node_id:
                             has_active_id = True
-                            stop_active_openvpn()
+                    # Don't stop if channels are active
+                    with lock:
+                        for chi in range(MAX_CHANNELS):
+                            if ch_processes[chi] is not None and ch_processes[chi].poll() is None:
+                                has_active_id = False
+                                break
+                    if not has_active_id: continue
+                    stop_active_openvpn()
                     if has_active_id:
                         print("[维护线程] 检测到当前 OpenVPN 进程已意外退出，准备自动切换节点", flush=True)
                         is_connecting = False
