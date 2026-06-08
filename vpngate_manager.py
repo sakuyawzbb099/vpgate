@@ -2090,6 +2090,12 @@ background:var(--bg-glass);border:1px solid var(--border-default);color:var(--te
 .channel-section-title{font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--accent-gold-light);display:flex;align-items:center;gap:10px}
 .channel-section-title svg{width:18px;height:18px}
 .channel-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px}
+.channel-select-btn{background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;padding:12px 8px;color:var(--text-primary);font-size:13px;font-weight:500;cursor:pointer;transition:all 0.15s ease;text-align:center}
+.channel-select-btn:hover{background:rgba(99,102,241,0.18);border-color:var(--accent);transform:translateY(-1px)}
+.channel-select-btn:active{transform:translateY(0)}
+.channel-select-btn{background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;padding:12px 8px;color:var(--text-primary);font-size:13px;font-weight:500;cursor:pointer;transition:all 0.15s ease;text-align:center}
+.channel-select-btn:hover{background:rgba(99,102,241,0.18);border-color:var(--accent);transform:translateY(-1px)}
+.channel-select-btn:active{transform:translateY(0)}
 .channel-card{
 background:var(--bg-surface);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
 border:1px solid var(--border-default);border-radius:var(--radius-md);padding:12px 14px;
@@ -2407,6 +2413,19 @@ Telegram 群组
 </div>
 </div>
 
+
+<!-- ===== Channel Selector Modal ===== -->
+<div class="modal" id="channelSelectModal">
+<div class="modal-content" style="max-width:400px">
+<button class="modal-close" onclick="closeChannelSelectModal()">&times;</button>
+<div class="modal-title" id="channelSelectTitle">选择目标通道</div>
+<p style="color:var(--text-secondary);font-size:13px;margin:0 0 16px 0" id="channelSelectNodeInfo"></p>
+<div id="channelSelectList" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"></div>
+<div class="modal-actions" style="margin-top:12px">
+<button type="button" class="btn-secondary" onclick="closeChannelSelectModal()">取消</button>
+</div>
+</div>
+</div>
 <!-- ===== Gateway Modal ===== -->
 <div class="modal" id="gatewayModal">
 <div class="modal-content">
@@ -2653,7 +2672,7 @@ function renderTable() {
       '<td style="font-family:\'JetBrains Mono\',monospace;font-weight:500;color:var(--text-primary)">'+(n.speed!=null?n.speed:'-')+' MB/s</td>'+
       '<td><span class="badge '+statusBadgeClass+'">'+(statusLabel==='可用'?'<span class="badge-pulse"></span>':'')+statusLabel+'</span></td>'+
       '<td><div class="table-actions">'+
-      '<button class="connect-btn"'+(n.status==='unavailable'||n.status==='offline'||isTesting?' disabled':'')+' onclick="selectNode(\''+esc(n.name)+'\')">连接</button>'+
+      '<button class="connect-btn"'+(n.status==='unavailable'||n.status==='offline'||isTesting?' disabled':'')+' onclick="openChannelSelectModal(\''+esc(n.id||n.name)+'\',\''+esc(n.name||n.ip||'')+'\',\''+esc(n.country||'')+'\',\''+esc(n.asn||'')+'\')">连接</button>'+
       '<button class="test-btn"'+(n.status==='unavailable'||n.status==='offline'||isTesting?' disabled':'')+' onclick="testNode(\''+esc(n.name)+'\')">'+(isTesting?'测速中...':'测速')+'</button>'+
       '</div></td></tr>';
   }
@@ -2673,6 +2692,42 @@ async function selectNode(name) {
   } catch(e) { alert('连接请求失败，请检查网络'); }
 }
 
+
+// ===== Channel Selector Modal =====
+var _selNode = null;
+
+function openChannelSelectModal(nid, label, country, asn) {
+  _selNode = {id:nid, label:label, country:country, asn:asn};
+  $("channelSelectTitle").textContent = "选择目标通道";
+  $("channelSelectNodeInfo").innerHTML = "节点: <strong>"+esc(label)+"</strong> ("+esc(country)+(asn?" \u00b7 "+esc(asn):"")+")";
+  var box = $("channelSelectList");
+  box.innerHTML = "";
+  for (var ci=0; ci<6; ci++) {
+    var b = document.createElement("button");
+    b.className = "channel-select-btn";
+    b.textContent = "通道 "+ci;
+    b.onclick = (function(i){ return function(){ _assignChannel(i); }; })(ci);
+    box.appendChild(b);
+  }
+  $("channelSelectModal").style.display = "flex";
+}
+
+function closeChannelSelectModal() {
+  $("channelSelectModal").style.display = "none";
+  _selNode = null;
+}
+
+function _assignChannel(idx) {
+  var n = _selNode; if (!n) return;
+  var cl = channels.length ? channels : sampleChannels;
+  if (!cl[idx]) return;
+  cl[idx].lock_country = n.country||"";
+  cl[idx].lock_asn = n.asn||"";
+  cl[idx].lock_node = n.id||"";
+  closeChannelSelectModal();
+  renderChannels();
+  setTimeout(function(){ connectChannel(idx); }, 300);
+}
 async function testNode(name) {
   if (testingNodeIds.has(name)) return;
   testingNodeIds.add(name);
