@@ -2719,7 +2719,7 @@ async function connectChannel(idx) {
   try {
     var r = await fetch('./api/connect', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id: target.name})
+      body: JSON.stringify({id: target.id||target.name})
     });
     var d = await r.json();
     if (d.ok) {
