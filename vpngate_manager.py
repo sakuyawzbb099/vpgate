@@ -1093,50 +1093,73 @@ def run_openvpn_until_ready(config_file: str, keep_alive: bool, route_nopull: bo
     return ok, message, process
 
 
-def setup_policy_routing(interface: str = "tun0") -> None:
+def setup_policy_routing(interface: str = "tun0", table: int = 100) -> None:
+    # Clean up any existing rules/routes for this table
     try:
-        subprocess.run(["ip", "rule", "del", "table", "100"], capture_output=True, timeout=2)
+        subprocess.run(["ip", "rule", "del", "table", str(table)], capture_output=True, timeout=2)
     except Exception:
         pass
     try:
-        subprocess.run(["ip", "route", "flush", "table", "100"], capture_output=True, timeout=2)
+        subprocess.run(["ip", "route", "flush", "table", str(table)], capture_output=True, timeout=2)
     except Exception:
         pass
     
     success = False
     for attempt in range(1, 4):
         try:
-            subprocess.run(["ip", "route", "add", "default", "dev", interface, "table", "100"], check=True, timeout=2)
-            subprocess.run(["ip", "rule", "add", "oif", interface, "table", "100"], check=True, timeout=2)
-            # 配置反向路径过滤 rp_filter 为 loose 模式 (2)，防止回包被内核静默丢弃
+            subprocess.run(["ip", "route", "add", "default", "dev", interface, "table", str(table)], check=True, timeout=2)
+            subprocess.run(["ip", "rule", "add", "oif", interface, "table", str(table)], check=True, timeout=2)
+            # rp_filter loose mode (2)
             for proc_path in ["all", "default", interface]:
                 try:
                     subprocess.run(["sysctl", "-w", f"net.ipv4.conf.{proc_path}.rp_filter=2"], capture_output=True, timeout=2)
                 except Exception:
                     pass
-            print(f"[policy_routing] Enabled policy routing for interface {interface} (attempt {attempt} success)", flush=True)
+            print(f"[policy_routing] Enabled policy routing for {interface} table {table} (attempt {attempt} success)", flush=True)
             success = True
+            # fwmark rule + iptables so proxy outbound uses this routing table
+            mark = table
+            subprocess.run(["ip", "rule", "add", "fwmark", str(mark), "table", str(table)], capture_output=True, timeout=2)
+            proxy_port = CHANNEL_BASE_PORT + (table - 100)
+            try:
+                subprocess.run(["iptables", "-t", "mangle", "-C", "OUTPUT", "-p", "tcp", "--sport", str(proxy_port), "-j", "MARK", "--set-mark", str(mark)], capture_output=True, timeout=2)
+            except Exception:
+                try:
+                    subprocess.run(["iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "tcp", "--sport", str(proxy_port), "-j", "MARK", "--set-mark", str(mark)], check=True, timeout=5)
+                except Exception as e:
+                    print(f"[policy_routing] iptables fwmark for port {proxy_port} failed (non-fatal): {e}", flush=True)
             break
         except Exception as e:
-            print(f"[policy_routing] Attempt {attempt} failed to enable policy routing: {e}", flush=True)
+            print(f"[policy_routing] Attempt {attempt} failed for {interface} table {table}: {e}", flush=True)
             time.sleep(1)
             
     if not success:
-        print("[路由配置失败] [错误代码 3003] [ERR_ROUTE_TABLE_ADD_FAILED] 策略路由配置失败。原因: 无法向路由表 100 添加默认路由，这可能会导致通过 VPN 接口的出站路由无法正常解析。请检查系统是否支持策略路由、iproute2 工具是否完整，以及是否具有 root 权限。", flush=True)
-        log_to_json("ERROR", "Routing", "[错误代码 3003] [ERR_ROUTE_TABLE_ADD_FAILED] 策略路由配置失败。原因: 无法向路由表 100 添加默认路由")
+        print(f"[路由配置失败] 无法向路由表 {table} 添加默认路由 (接口 {interface})。请检查 root 权限。", flush=True)
+        log_to_json("ERROR", "Routing", f"无法向路由表 {table} 添加默认路由")
 
-def cleanup_policy_routing() -> None:
+def cleanup_policy_routing(table: int = 100) -> None:
     try:
-        subprocess.run(["ip", "rule", "del", "table", "100"], capture_output=True, timeout=2)
-        subprocess.run(["ip", "route", "flush", "table", "100"], capture_output=True, timeout=2)
-        print("[policy_routing] Cleared policy routing table 100", flush=True)
+        subprocess.run(["ip", "rule", "del", "table", str(table)], capture_output=True, timeout=2)
+        subprocess.run(["ip", "route", "flush", "table", str(table)], capture_output=True, timeout=2)
+        print(f"[policy_routing] Cleared policy routing table {table}", flush=True)
+        # Remove iptables fwmark for this channel's proxy port
+        proxy_port = CHANNEL_BASE_PORT + (table - 100)
+        try:
+            subprocess.run(["iptables", "-t", "mangle", "-D", "OUTPUT", "-p", "tcp", "--sport", str(proxy_port), "-j", "MARK", "--set-mark", str(table)], capture_output=True, timeout=2)
+        except Exception:
+            pass
+        # Remove fwmark ip rule
+        try:
+            subprocess.run(["ip", "rule", "del", "fwmark", str(table)], capture_output=True, timeout=2)
+        except Exception:
+            pass
     except Exception:
         pass
 
 def stop_active_openvpn() -> None:
     global active_openvpn_process, active_openvpn_node_id
     with lock:
-        cleanup_policy_routing()
+        cleanup_policy_routing(100)
         config_to_delete = None
         if active_openvpn_node_id:
             nodes = read_nodes()
@@ -1483,7 +1506,7 @@ def connect_channel(channel_idx: int, node_id: str) -> str:
         ok, msg, proc = run_openvpn_until_ready(config_text, keep_alive=True, route_nopull=False, dev=f"tun{channel_idx}")
         if ok and proc:
             ch_processes[channel_idx] = proc
-            setup_policy_routing(f"tun{channel_idx}")
+            setup_policy_routing(f"tun{channel_idx}", 100 + channel_idx)
         return msg
     finally:
         ch_connecting[channel_idx] = False
@@ -1497,6 +1520,7 @@ def disconnect_channel(channel_idx: int) -> str:
             stop_process(ch_processes[channel_idx])
             ch_processes[channel_idx] = None
             ch_node_ids[channel_idx] = ""
+        cleanup_policy_routing(100 + channel_idx)
     return "disconnected"
 
 
